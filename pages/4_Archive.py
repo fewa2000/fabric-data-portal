@@ -87,40 +87,49 @@ if run_kpis:
         k2.metric("Orders", f"{run_kpis.get('orders', 0):,}")
         k3.metric("AOV", f"${run_kpis.get('aov', 0):,.2f}")
 
-        # Funnel
+        # Funnel (only if visitor data was in the source file)
         funnel = run_kpis.get("funnel")
         if funnel:
-            f1, f2, _ = st.columns(3)
-            f1.metric("Total Visitors", f"{funnel.get('total_visitors', 0):,}")
-            f2.metric("Conversion Rate", f"{funnel.get('conversion_rate_pct', 'N/A')}%")
+            funnel_metrics = []
+            if "total_visitors" in funnel:
+                funnel_metrics.append(("Total Visitors", f"{funnel['total_visitors']:,}"))
+            if "conversion_rate_pct" in funnel:
+                funnel_metrics.append(("Conversion Rate", f"{funnel['conversion_rate_pct']}%"))
+            if funnel_metrics:
+                fcols = st.columns(len(funnel_metrics) + 1)  # +1 for empty spacer
+                for i, (label, value) in enumerate(funnel_metrics):
+                    fcols[i].metric(label, value)
 
-    # Breakdowns
+    # Breakdowns - support both legacy and dynamic formats
     with st.expander("Revenue Breakdowns"):
-        bcol1, bcol2, bcol3 = st.columns(3)
-        rev_ch = run_kpis.get("revenue_by_channel")
-        if rev_ch:
-            with bcol1:
-                st.markdown("**By Channel**")
-                st.dataframe(
-                    pd.DataFrame(list(rev_ch.items()), columns=["Channel", "Revenue"]),
-                    hide_index=True,
-                )
-        rev_rg = run_kpis.get("revenue_by_region")
-        if rev_rg:
-            with bcol2:
-                st.markdown("**By Region**")
-                st.dataframe(
-                    pd.DataFrame(list(rev_rg.items()), columns=["Region", "Revenue"]),
-                    hide_index=True,
-                )
-        rev_cat = run_kpis.get("revenue_by_product_category")
-        if rev_cat:
-            with bcol3:
-                st.markdown("**By Category**")
-                st.dataframe(
-                    pd.DataFrame(list(rev_cat.items()), columns=["Category", "Revenue"]),
-                    hide_index=True,
-                )
+        # Collect all breakdowns from legacy and dynamic formats
+        legacy_breakdowns = {}
+        for key in ["revenue_by_channel", "revenue_by_region", "revenue_by_product_category"]:
+            if key in run_kpis and isinstance(run_kpis[key], dict):
+                legacy_breakdowns[key] = run_kpis[key]
+
+        dynamic_breakdowns = run_kpis.get("breakdowns", {})
+        if isinstance(dynamic_breakdowns, dict):
+            all_breakdowns = {**legacy_breakdowns, **dynamic_breakdowns}
+        else:
+            all_breakdowns = legacy_breakdowns
+
+        if all_breakdowns:
+            breakdown_items = list(all_breakdowns.items())
+            for i in range(0, len(breakdown_items), 3):
+                row_items = breakdown_items[i:i + 3]
+                cols = st.columns(len(row_items))
+                for j, (key, data) in enumerate(row_items):
+                    with cols[j]:
+                        title = key.replace("revenue_by_", "").replace("_", " ").title()
+                        st.markdown(f"**By {title}**")
+                        if isinstance(data, dict):
+                            st.dataframe(
+                                pd.DataFrame(list(data.items()), columns=[title, "Revenue"]),
+                                hide_index=True,
+                            )
+        else:
+            st.info("No breakdown data available.")
 else:
     st.info("No KPI data available for this run.")
 

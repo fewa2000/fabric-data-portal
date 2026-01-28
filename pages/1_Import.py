@@ -36,6 +36,41 @@ if locked and lock_info:
         f"Please wait for it to finish before starting a new run."
     )
 
+# ── Upload new file ─────────────────────────────────────────────
+st.subheader("Upload Import File")
+st.markdown("Upload a new file to `Files/import/` in the Lakehouse.")
+
+uploaded_file = st.file_uploader(
+    "Choose a file to upload",
+    type=["xlsx", "xls", "csv"],
+    help="Supported formats: Excel (.xlsx, .xls) and CSV (.csv)",
+)
+
+if uploaded_file is not None:
+    # Show file info
+    st.markdown(f"**Selected file:** `{uploaded_file.name}` ({uploaded_file.size:,} bytes)")
+
+    if st.button("Upload to OneLake", type="primary"):
+        with st.spinner(f"Uploading `{uploaded_file.name}` to OneLake..."):
+            file_content = uploaded_file.read()
+            success = fabric_artifacts.upload_import_file(uploaded_file.name, file_content)
+
+        if success:
+            st.success(f"File `{uploaded_file.name}` uploaded successfully.")
+            # Clear session state to force refresh of file list
+            if "import_profile" in st.session_state:
+                del st.session_state["import_profile"]
+            if "import_profile_file" in st.session_state:
+                del st.session_state["import_profile_file"]
+            st.rerun()
+        else:
+            st.error(
+                f"Failed to upload `{uploaded_file.name}`. "
+                "Check logs for details."
+            )
+
+st.divider()
+
 # ── List import files ───────────────────────────────────────────
 st.subheader("Available Import Files")
 
@@ -76,7 +111,11 @@ if st.button("Inspect File", type="secondary", disabled=not selected_file):
         st.error(f"Could not download `{selected_name}` from OneLake.")
     else:
         try:
-            df_raw = pd.read_excel(io.BytesIO(raw_bytes))
+            # Support both Excel and CSV files
+            if selected_name.lower().endswith(".csv"):
+                df_raw = pd.read_csv(io.BytesIO(raw_bytes))
+            else:
+                df_raw = pd.read_excel(io.BytesIO(raw_bytes))
             # Normalize columns (same logic as the Fabric notebook)
             df_raw.columns = [c.strip().lower().replace(" ", "_") for c in df_raw.columns]
             profile = compute_import_profile(
@@ -88,7 +127,7 @@ if st.button("Inspect File", type="secondary", disabled=not selected_file):
             st.session_state["import_profile"] = profile
             st.session_state["import_profile_file"] = selected_name
         except Exception as e:
-            st.error(f"Failed to read Excel file: {e}")
+            st.error(f"Failed to read file: {e}")
 
 # Display profile if available in session state
 profile = st.session_state.get("import_profile")

@@ -2,22 +2,24 @@
 KPI computation logic.
 Computes KPIs from cleaned sales data (pandas DataFrame).
 Used by the notebook to produce kpis.json.
+
+All KPIs are derived dynamically from the data.
+No hardcoded business constants or benchmarks are used.
 """
 
 from typing import Any
 
 import pandas as pd
 
-# Funnel constants from data_explained.txt
-FUNNEL_TOTAL_VISITORS = 1_428_571
-FUNNEL_CONVERTING_VISITORS = 49_080
-
 
 def compute_kpis(df: pd.DataFrame) -> dict[str, Any]:
     """
     Compute all required KPIs from a cleaned sales DataFrame.
-    Expected columns (normalized): order_id, order_date, region,
-        product_category, channel, revenue, visitor_id.
+    All metrics are derived dynamically from the file's contents.
+
+    Minimum required columns: order_id, revenue.
+    Optional columns for breakdowns: channel, region, product_category, order_date.
+    Optional columns for conversion: visitor_id or total_visitors.
     """
     kpis: dict[str, Any] = {}
 
@@ -47,20 +49,16 @@ def compute_kpis(df: pd.DataFrame) -> dict[str, Any]:
     kpis["orders"] = order_count
     kpis["aov"] = round(aov, 2)
 
-    # Conversion funnel
-    kpis["funnel"] = {
-        "total_visitors": FUNNEL_TOTAL_VISITORS,
-        "converting_visitors": FUNNEL_CONVERTING_VISITORS,
-        "orders": order_count,
-        "conversion_rate_pct": round(
-            (order_count / FUNNEL_TOTAL_VISITORS) * 100, 2
-        )
-        if FUNNEL_TOTAL_VISITORS > 0
-        else None,
-        "definition": "conversion_rate = orders / total_visitors",
-    }
+    # Conversion funnel - derived from data only
+    # Look for visitor-related columns to compute conversion
+    funnel = _compute_funnel_from_data(df, order_count)
+    if funnel:
+        kpis["funnel"] = funnel
 
-    # Revenue by channel
+    # Dynamic breakdowns - detect available categorical columns
+    kpis["breakdowns"] = _compute_dynamic_breakdowns(df)
+
+    # Revenue by channel (kept for backward compatibility)
     if "channel" in df.columns:
         try:
             rev_by_channel = (
@@ -116,6 +114,152 @@ def compute_kpis(df: pd.DataFrame) -> dict[str, Any]:
             kpis["time_series_monthly"] = []
 
     return kpis
+
+
+def _compute_funnel_from_data(df: pd.DataFrame, order_count: int) -> dict[str, Any] | None:
+    """
+    Compute conversion funnel metrics dynamically from the data.
+    Returns None if no visitor data is available.
+
+    Looks for columns: visitor_id, total_visitors, converting_visitors, visitors.
+    """
+    funnel: dict[str, Any] = {"orders": order_count}
+
+    # Try to find visitor count from different possible columns
+    total_visitors = None
+    converting_visitors = None
+    definition_parts = []
+
+    # Check for total_visitors column (explicit count)
+    if "total_visitors" in df.columns:
+        try:
+            # If it's a constant column, take the first value
+            unique_vals = df["total_visitors"].dropna().unique()
+            if len(unique_vals) == 1:
+                total_visitors = int(unique_vals[0])
+            else:
+                # Sum if multiple values
+                total_visitors = int(df["total_visitors"].sum())
+            definition_parts.append("total_visitors from column")
+        except Exception:
+            pass
+
+    # Check for visitor_id column (count unique visitors)
+    if total_visitors is None and "visitor_id" in df.columns:
+        try:
+            total_visitors = int(df["visitor_id"].nunique())
+            definition_parts.append("total_visitors = unique visitor_id count")
+        except Exception:
+            pass
+
+    # Check for visitors column
+    if total_visitors is None and "visitors" in df.columns:
+        try:
+            unique_vals = df["visitors"].dropna().unique()
+            if len(unique_vals) == 1:
+                total_visitors = int(unique_vals[0])
+            else:
+                total_visitors = int(df["visitors"].sum())
+            definition_parts.append("total_visitors from visitors column")
+        except Exception:
+            pass
+
+    # Check for converting_visitors column
+    if "converting_visitors" in df.columns:
+        try:
+            unique_vals = df["converting_visitors"].dropna().unique()
+            if len(unique_vals) == 1:
+                converting_visitors = int(unique_vals[0])
+            else:
+                converting_visitors = int(df["converting_visitors"].sum())
+            definition_parts.append("converting_visitors from column")
+        except Exception:
+            pass
+
+    # If no visitor data found, return None
+    if total_visitors is None:
+        return None
+
+    funnel["total_visitors"] = total_visitors
+
+    if converting_visitors is not None:
+        funnel["converting_visitors"] = converting_visitors
+        # Compute visitor-to-converting conversion rate
+        if total_visitors > 0:
+            funnel["visitor_conversion_rate_pct"] = round(
+                (converting_visitors / total_visitors) * 100, 2
+            )
+
+    # Compute order conversion rate
+    if total_visitors > 0:
+        funnel["conversion_rate_pct"] = round(
+            (order_count / total_visitors) * 100, 2
+        )
+
+    funnel["definition"] = (
+        "conversion_rate = orders / total_visitors; "
+        + "; ".join(definition_parts)
+    )
+
+    return funnel
+
+
+def _compute_dynamic_breakdowns(df: pd.DataFrame) -> dict[str, Any]:
+    """
+    Dynamically detect categorical columns and compute revenue breakdowns.
+    Returns a dict with breakdown name -> {category: revenue} mappings.
+    """
+    breakdowns: dict[str, Any] = {}
+
+    if "revenue" not in df.columns:
+        return breakdowns
+
+    # Identify potential categorical columns for breakdown
+    # Exclude known non-categorical columns
+    exclude_cols = {
+        "revenue", "order_id", "visitor_id", "order_date", "date",
+        "total_visitors", "converting_visitors", "visitors",
+        "quantity", "price", "amount", "total", "subtotal",
+    }
+
+    for col in df.columns:
+        col_lower = col.lower()
+        if col_lower in exclude_cols:
+            continue
+
+        # Check if column is suitable for breakdown (categorical-like)
+        try:
+            unique_count = df[col].nunique()
+            row_count = len(df)
+
+            # Skip if too many unique values (likely not categorical)
+            # or if it's all unique (likely an ID column)
+            if unique_count > 50 or unique_count == row_count:
+                continue
+
+            # Skip if too few categories
+            if unique_count < 2:
+                continue
+
+            # Skip numeric columns that look like IDs or continuous values
+            if df[col].dtype in ("int64", "float64"):
+                # Check if values look like IDs (sequential or random large numbers)
+                if df[col].min() > 1000 or unique_count > 20:
+                    continue
+
+            # Compute revenue breakdown for this column
+            rev_breakdown = (
+                df.groupby(col)["revenue"]
+                .sum()
+                .round(2)
+                .sort_values(ascending=False)
+            )
+            breakdowns[f"revenue_by_{col}"] = rev_breakdown.to_dict()
+
+        except Exception:
+            continue
+
+    return breakdowns
 
 
 def compute_import_profile(

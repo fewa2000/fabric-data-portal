@@ -1,12 +1,12 @@
 """
-Artifact reader for Fabric OneLake files.
+Artifact reader and writer for Fabric OneLake files.
 Fetches small JSON/CSV artifacts produced by the notebook.
+Supports uploading files to OneLake.
 
 Designed with a pluggable interface so we can later swap to direct
 OneLake filesystem browsing or Azure SDK access.
 """
 
-import json
 import logging
 from typing import Any
 
@@ -175,3 +175,76 @@ def get_run_metadata(run_id: str) -> dict[str, Any] | None:
 def get_current_sample_csv() -> str | None:
     """Read sample CSV from current results."""
     return read_csv_artifact("Files/results/current/sales_cleaned.csv")
+
+
+def upload_import_file(file_name: str, file_content: bytes) -> bool:
+    """
+    Upload a file to Files/import/ in OneLake.
+    Uses OneLake DFS PUT API with ?resource=file for creation.
+    Returns True on success, False on failure.
+    """
+    cfg = get_fabric_config()
+    file_path = f"Files/import/{file_name}"
+
+    # Step 1: Create the file resource
+    create_url = (
+        f"{_ONELAKE_DFS}/{cfg.workspace_id}/{cfg.lakehouse_id}"
+        f"/{file_path}?resource=file"
+    )
+    headers = get_storage_headers()
+    headers["Content-Length"] = "0"
+
+    try:
+        resp = requests.put(create_url, headers=headers, timeout=30)
+        if resp.status_code not in (201, 200):
+            logger.warning(
+                "Failed to create file resource %s: %s %s",
+                file_path, resp.status_code, resp.text[:300],
+            )
+            return False
+    except Exception as e:
+        logger.error("Error creating file resource %s: %s", file_path, e)
+        return False
+
+    # Step 2: Append/flush the content
+    append_url = (
+        f"{_ONELAKE_DFS}/{cfg.workspace_id}/{cfg.lakehouse_id}"
+        f"/{file_path}?action=append&position=0"
+    )
+    headers = get_storage_headers()
+    headers["Content-Length"] = str(len(file_content))
+
+    try:
+        resp = requests.patch(append_url, headers=headers, data=file_content, timeout=120)
+        if resp.status_code not in (202, 200):
+            logger.warning(
+                "Failed to append content to %s: %s %s",
+                file_path, resp.status_code, resp.text[:300],
+            )
+            return False
+    except Exception as e:
+        logger.error("Error appending content to %s: %s", file_path, e)
+        return False
+
+    # Step 3: Flush the file to finalize
+    flush_url = (
+        f"{_ONELAKE_DFS}/{cfg.workspace_id}/{cfg.lakehouse_id}"
+        f"/{file_path}?action=flush&position={len(file_content)}"
+    )
+    headers = get_storage_headers()
+    headers["Content-Length"] = "0"
+
+    try:
+        resp = requests.patch(flush_url, headers=headers, timeout=30)
+        if resp.status_code not in (200, 202):
+            logger.warning(
+                "Failed to flush file %s: %s %s",
+                file_path, resp.status_code, resp.text[:300],
+            )
+            return False
+    except Exception as e:
+        logger.error("Error flushing file %s: %s", file_path, e)
+        return False
+
+    logger.info("Successfully uploaded file: %s", file_path)
+    return True

@@ -95,54 +95,66 @@ else:
             f"${kpis.get('aov', 0):,.2f}",
         )
 
-        # Conversion funnel
+        # Conversion funnel (only shown if visitor data exists in the source file)
         funnel = kpis.get("funnel")
         if funnel and isinstance(funnel, dict):
             st.markdown("---")
-            st.markdown("**Conversion Funnel**")
-            fcol1, fcol2, fcol3, fcol4 = st.columns(4)
-            fcol1.metric("Total Visitors", f"{funnel.get('total_visitors', 0):,}")
-            fcol2.metric(
-                "Converting Visitors", f"{funnel.get('converting_visitors', 0):,}"
-            )
-            fcol3.metric("Orders", f"{funnel.get('orders', 0):,}")
-            fcol4.metric(
-                "Conversion Rate",
-                f"{funnel.get('conversion_rate_pct', 'N/A')}%",
-            )
-            st.caption(f"Definition: {funnel.get('definition', '')}")
+            st.markdown("**Conversion Funnel** *(derived from data)*")
+
+            # Dynamic column layout based on available metrics
+            funnel_metrics = []
+            if "total_visitors" in funnel:
+                funnel_metrics.append(("Total Visitors", f"{funnel['total_visitors']:,}"))
+            if "converting_visitors" in funnel:
+                funnel_metrics.append(("Converting Visitors", f"{funnel['converting_visitors']:,}"))
+            funnel_metrics.append(("Orders", f"{funnel.get('orders', 0):,}"))
+            if "conversion_rate_pct" in funnel:
+                funnel_metrics.append(("Conversion Rate", f"{funnel['conversion_rate_pct']}%"))
+            if "visitor_conversion_rate_pct" in funnel:
+                funnel_metrics.append(("Visitor Conv. Rate", f"{funnel['visitor_conversion_rate_pct']}%"))
+
+            fcols = st.columns(len(funnel_metrics))
+            for i, (label, value) in enumerate(funnel_metrics):
+                fcols[i].metric(label, value)
+
+            if "definition" in funnel:
+                st.caption(f"Definition: {funnel['definition']}")
 
         st.markdown("---")
 
-        # Breakdowns side by side
-        bcol1, bcol2, bcol3 = st.columns(3)
+        # Dynamic breakdowns - display all available revenue breakdowns
+        # First check for legacy format (revenue_by_channel, etc. at top level)
+        legacy_breakdowns = {}
+        for key in ["revenue_by_channel", "revenue_by_region", "revenue_by_product_category"]:
+            if key in kpis and isinstance(kpis[key], dict):
+                legacy_breakdowns[key] = kpis[key]
 
-        rev_channel = kpis.get("revenue_by_channel")
-        if rev_channel and isinstance(rev_channel, dict):
-            with bcol1:
-                st.markdown("**Revenue by Channel**")
-                df_ch = pd.DataFrame(
-                    list(rev_channel.items()), columns=["Channel", "Revenue"]
-                )
-                st.dataframe(df_ch, width='stretch', hide_index=True)
+        # Then check for new dynamic breakdowns format
+        dynamic_breakdowns = kpis.get("breakdowns", {})
+        if isinstance(dynamic_breakdowns, dict):
+            # Merge, preferring dynamic over legacy for same keys
+            all_breakdowns = {**legacy_breakdowns, **dynamic_breakdowns}
+        else:
+            all_breakdowns = legacy_breakdowns
 
-        rev_region = kpis.get("revenue_by_region")
-        if rev_region and isinstance(rev_region, dict):
-            with bcol2:
-                st.markdown("**Revenue by Region**")
-                df_rg = pd.DataFrame(
-                    list(rev_region.items()), columns=["Region", "Revenue"]
-                )
-                st.dataframe(df_rg, width='stretch', hide_index=True)
+        if all_breakdowns:
+            st.markdown("**Revenue Breakdowns** *(auto-detected from data)*")
 
-        rev_cat = kpis.get("revenue_by_product_category")
-        if rev_cat and isinstance(rev_cat, dict):
-            with bcol3:
-                st.markdown("**Revenue by Product Category**")
-                df_cat = pd.DataFrame(
-                    list(rev_cat.items()), columns=["Category", "Revenue"]
-                )
-                st.dataframe(df_cat, width='stretch', hide_index=True)
+            # Display breakdowns in rows of 3
+            breakdown_items = list(all_breakdowns.items())
+            for i in range(0, len(breakdown_items), 3):
+                row_items = breakdown_items[i:i + 3]
+                cols = st.columns(len(row_items))
+                for j, (breakdown_name, breakdown_data) in enumerate(row_items):
+                    with cols[j]:
+                        # Create a readable title from the key
+                        title = breakdown_name.replace("revenue_by_", "").replace("_", " ").title()
+                        st.markdown(f"**By {title}**")
+                        if isinstance(breakdown_data, dict):
+                            df_bd = pd.DataFrame(
+                                list(breakdown_data.items()), columns=[title, "Revenue"]
+                            )
+                            st.dataframe(df_bd, width='stretch', hide_index=True)
 
         # Time series
         ts = kpis.get("time_series_monthly")
