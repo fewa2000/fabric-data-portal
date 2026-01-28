@@ -177,6 +177,46 @@ def get_current_sample_csv() -> str | None:
     return read_csv_artifact("Files/results/current/sales_cleaned.csv")
 
 
+def get_current_parquet() -> bytes | None:
+    """Read Parquet file from current results."""
+    return read_binary_artifact("Files/results/current/sales_cleaned.parquet")
+
+
+def get_run_sample_csv(run_id: str) -> str | None:
+    """Read sample CSV for a specific run."""
+    return read_csv_artifact(f"Files/results/runs/{run_id}/sales_cleaned.csv")
+
+
+def read_binary_artifact(file_path: str) -> bytes | None:
+    """
+    Read a binary artifact from OneLake (e.g., Parquet files).
+    Returns raw bytes or None if not found.
+    """
+    url = _build_onelake_url(file_path)
+    headers = get_storage_headers()
+    try:
+        resp = requests.get(url, headers=headers, timeout=60)
+        if resp.status_code == 200:
+            return resp.content
+        elif resp.status_code == 404:
+            logger.info("Binary artifact not found: %s", file_path)
+            return None
+        else:
+            logger.warning(
+                "Failed to read binary artifact %s: %s %s",
+                file_path, resp.status_code, resp.text[:200],
+            )
+            return None
+    except Exception as e:
+        logger.error("Error reading binary artifact %s: %s", file_path, e)
+        return None
+
+
+def get_run_parquet(run_id: str) -> bytes | None:
+    """Read Parquet file for a specific run."""
+    return read_binary_artifact(f"Files/results/runs/{run_id}/sales_cleaned.parquet")
+
+
 def upload_import_file(file_name: str, file_content: bytes) -> bool:
     """
     Upload a file to Files/import/ in OneLake.

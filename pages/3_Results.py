@@ -43,13 +43,43 @@ if csv_text:
         st.dataframe(df_preview, width='stretch', hide_index=True)
         st.caption(f"Showing first {len(df_preview)} rows")
 
-        # Download button
-        st.download_button(
-            label="Download CSV preview",
-            data=csv_text,
-            file_name="sales_cleaned_preview.csv",
-            mime="text/csv",
-        )
+        # Download buttons in a row
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            # Preview CSV (first 100 rows)
+            preview_csv = df_preview.to_csv(index=False)
+            st.download_button(
+                label="Download CSV preview",
+                data=preview_csv,
+                file_name="sales_cleaned_preview.csv",
+                mime="text/csv",
+            )
+
+        with col2:
+            # Full CSV download
+            st.download_button(
+                label="Download full CSV",
+                data=csv_text,
+                file_name="sales_cleaned.csv",
+                mime="text/csv",
+            )
+
+        with col3:
+            # Full Parquet download
+            try:
+                parquet_data = fabric_artifacts.get_current_parquet()
+                if parquet_data:
+                    st.download_button(
+                        label="Download full Parquet",
+                        data=parquet_data,
+                        file_name="sales_cleaned.parquet",
+                        mime="application/octet-stream",
+                    )
+                else:
+                    st.button("Download full Parquet", disabled=True, help="Parquet file not available")
+            except Exception as e:
+                st.button("Download full Parquet", disabled=True, help=f"Error: {e}")
     except Exception as e:
         st.error(f"Failed to parse CSV data: {e}")
 else:

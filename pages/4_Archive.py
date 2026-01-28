@@ -1,21 +1,16 @@
 """
 Page 4 — Archive / History
-Browse past runs, view KPIs per run, restore past results to current.
+Browse past runs, view KPIs per run (read-only).
 """
-
-import uuid
 
 import pandas as pd
 import streamlit as st
 
-from services import db, fabric_artifacts, fabric_pipelines, locking
+from services import db, fabric_artifacts
 
 st.set_page_config(page_title="Archive | Fabric Data Portal", layout="wide")
 st.title("Archive / History")
-st.markdown("Browse past pipeline runs, compare KPIs, and restore results.")
-
-# ── Sidebar: user identity for restore ──────────────────────────
-user_name = st.sidebar.text_input("Your name / identity", value="analyst", key="archive_user")
+st.markdown("Browse past pipeline runs and view historical KPIs (read-only).")
 
 # ── List all runs ───────────────────────────────────────────────
 st.subheader("Pipeline Run History")
@@ -172,100 +167,3 @@ with st.expander("Event Timeline"):
             st.markdown(f"- **{etime}** `{etype}` — {msg}")
     else:
         st.info("No events for this run.")
-
-# ── Restore action ──────────────────────────────────────────────
-st.subheader("Restore to Current")
-st.markdown(
-    "Promote this run's output to `Files/results/current/`. "
-    "This will overwrite the current results."
-)
-
-restore_disabled = (
-    selected_run["status"] != "SUCCEEDED"
-    or not user_name.strip()
-)
-
-if selected_run["status"] != "SUCCEEDED":
-    st.caption("Only successful runs can be restored.")
-
-if st.button(
-    f"Restore run {str(selected_run_id)[:8]}... to current",
-    disabled=restore_disabled,
-    type="primary",
-):
-    try:
-        with st.spinner("Triggering restore pipeline..."):
-            # Trigger a lightweight pipeline/notebook to copy
-            # runs/{run_id}/* -> current/*
-            # For now, trigger the pipeline with restore parameters
-            restore_run_id = uuid.uuid4()
-
-            result = fabric_pipelines.trigger_pipeline(
-                input_file=f"__restore__{selected_run_id}",
-                run_id=restore_run_id,
-                requested_by=user_name,
-            )
-
-            # Log the restore action
-            restore_id = db.insert_restore(
-                restored_by=user_name,
-                source_run_id=selected_run_id,
-                target_run_id=restore_run_id,
-            )
-
-            db.append_event(
-                run_id=selected_run_id,
-                event_type="LOG",
-                message=f"Restore triggered by {user_name}. "
-                        f"Restore ID: {restore_id}",
-            )
-
-        st.success(
-            f"Restore initiated. Source run `{str(selected_run_id)[:8]}...` "
-            f"will be promoted to `results/current/`.\n\n"
-            f"Restore audit ID: `{restore_id}`"
-        )
-
-    except Exception as e:
-        st.error(f"Restore failed: {e}")
-
-        # Fallback: log the restore intent even if pipeline fails
-        try:
-            restore_id = db.insert_restore(
-                restored_by=user_name,
-                source_run_id=selected_run_id,
-            )
-            db.append_event(
-                run_id=selected_run_id,
-                event_type="WARNING",
-                message=f"Restore requested by {user_name} but pipeline "
-                        f"trigger failed: {e}. Restore ID: {restore_id}",
-            )
-        except Exception:
-            pass
-
-# ── Restore history ─────────────────────────────────────────────
-st.subheader("Restore History")
-
-try:
-    restores = db.list_restores(limit=20)
-except Exception as e:
-    st.error(f"Failed to load restore history: {e}")
-    restores = []
-
-if restores:
-    restore_rows = []
-    for rr in restores:
-        restore_rows.append({
-            "Restored At": str(rr.get("restored_at", ""))[:19],
-            "Restored By": rr.get("restored_by", ""),
-            "Source Run": str(rr.get("source_run_id", ""))[:8] + "...",
-            "Target Run": str(rr.get("target_run_id", "N/A"))[:8] + "..."
-            if rr.get("target_run_id")
-            else "N/A",
-        })
-    st.dataframe(
-        pd.DataFrame(restore_rows), width='stretch', hide_index=True
-    )
-else:
-    st.info("No restore actions recorded.")
